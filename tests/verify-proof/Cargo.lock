@@ -137,9 +137,9 @@ dependencies = [
 
 [[package]]
 name = "either"
-version = "1.11.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a47c1c47d2f5964e29c61246e81db715514cd532db6b5116a25ea3c03d6780a2"
+checksum = "11157ac094ffbdde99aa67b23417ebdd801842852b500e395a45a9c0aac03e4a"
 
 [[package]]
 name = "elliptic-curve"
@@ -170,13 +170,6 @@ dependencies = [
  "bitvec",
  "rand_core",
  "subtle",
-]
-
-[[package]]
-name = "fibonacci-io-program"
-version = "0.1.0"
-dependencies = [
- "sp1-zkvm",
 ]
 
 [[package]]
@@ -223,6 +216,18 @@ dependencies = [
  "rand_core",
  "subtle",
 ]
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hmac"
@@ -671,6 +676,15 @@ name = "unicode-ident"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
+
+[[package]]
+name = "verify-proof"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "hex-literal",
+ "sp1-zkvm",
+]
 
 [[package]]
 name = "version_check"
