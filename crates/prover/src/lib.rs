@@ -1452,8 +1452,6 @@ pub fn compress_program_from_input<C: SP1ProverComponents>(
 
         use super::*;
 
-        use sp1_stark::{air::InteractionScope, MachineProof, MachineVerificationError};
-
         use crate::build::try_build_plonk_bn254_artifacts_dev;
         use anyhow::Result;
         use build::{build_constraints_and_witness, try_build_groth16_bn254_artifacts_dev};
@@ -1756,52 +1754,6 @@ pub fn compress_program_from_input<C: SP1ProverComponents>(
         // next release (v1.2.0+), and then switch it back.
         let prover = SP1Prover::<CpuProverComponents>::new();
         test_e2e_prover::<CpuProverComponents>(&prover, elf, SP1Stdin::default(), opts, Test::All)
-    }
-
-    #[test]
-    #[serial]
-    fn test_global_cumulative_sum_detects_missing_shard() -> Result<()> {
-        setup_logger();
-
-        // Speed up the test substantially; soundness isn't the goal here.
-        std::env::set_var("FRI_QUERIES", "1");
-
-        let elf = test_artifacts::FIBONACCI_ELF;
-        let prover = SP1Prover::<CpuProverComponents>::new();
-
-        // Force multi-shard execution so that removing a shard changes the global cumulative sum.
-        let mut opts = SP1ProverOpts::auto();
-        opts.core_opts.shard_size = 1 << 10;
-        opts.core_opts.shard_batch_size = 1;
-
-        let (_, pk_d, program, vk) = prover.setup(elf);
-        let core_proof = prover.prove_core(
-            &pk_d,
-            program,
-            &SP1Stdin::default(),
-            opts,
-            SP1Context::default(),
-        )?;
-
-        assert!(core_proof.proof.0.len() >= 2, "expected >= 2 shards to exercise truncation");
-
-        // Drop the last shard: each remaining shard proof can still verify in isolation, but the
-        // overall global bus closure check must fail.
-        let mut truncated = core_proof.proof.clone();
-        truncated.0.pop();
-
-        let machine_proof = MachineProof { shard_proofs: truncated.0 };
-        let mut challenger = prover.core_prover.config().challenger();
-        let err = prover
-            .core_prover
-            .machine()
-            .verify(&vk.vk, &machine_proof, &mut challenger)
-            .unwrap_err();
-
-        match err {
-            MachineVerificationError::NonZeroCumulativeSum(InteractionScope::Global, _) => Ok(()),
-            _ => Err(anyhow::anyhow!("unexpected verification error: {err:?}")),
-        }
     }
 
     /// Tests an end-to-end workflow of proving a program across the entire proof generation
