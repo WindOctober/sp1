@@ -17,6 +17,31 @@ cargo test -p sp1-core-machine --features sys \
 - C++ row writer: `crates/core/machine/include/memory_global.hpp`
 - FFI export: `crates/core/machine/cpp/extern.cpp`
 
+## C++ Row Writer (Excerpt)
+
+The `sys` C++ helper only fills the “base fields” (`addr/addr_bits/shard/timestamp/value/is_real`) and
+does not set the derived/aux columns that Rust tracegen sets (`lt_cols`, `is_next_comp`,
+`is_prev_addr_zero`, `is_first_comp`, `is_last_addr`):
+
+```cpp
+// crates/core/machine/include/memory_global.hpp
+namespace sp1_core_machine_sys::memory_global {
+    template<class F, class EF7>
+    __SP1_HOSTDEV__ void event_to_row(const MemoryInitializeFinalizeEvent* event, const bool is_receive, MemoryInitCols<F>* cols) {
+        cols->addr = F::from_canonical_u32(event->addr);
+        for(uintptr_t i = 0 ; i < 32 ; i++) {
+            cols->addr_bits.bits[i] = F::from_canonical_u32(((event->addr) >> i) & 1);
+        }
+        cols->shard = F::from_canonical_u32(event->shard);
+        cols->timestamp = F::from_canonical_u32(event->timestamp);
+        for(uintptr_t i = 0 ; i < 32 ; i++) {
+            cols->value[i] = F::from_canonical_u32(((event->value) >> i) & 1);
+        }
+        cols->is_real = F::one();
+    }
+}
+```
+
 ## PoC Test Code
 
 This PoC is a *differential* test: it asserts that the FFI row-writer output does **not** match
