@@ -154,7 +154,7 @@ impl<F: PrimeField32> MachineAir<F> for MemoryGlobalChip {
             }
             if i != 0 {
                 cols.is_next_comp = F::one();
-                let previous_addr = memory_events[i - 1].addr;
+                let previous_addr: u32 = memory_events[i - 1].addr;
                 assert_ne!(previous_addr, addr);
 
                 let addr_bits: [_; 32] = array::from_fn(|i| (addr >> i) & 1);
@@ -436,6 +436,7 @@ mod tests {
         syscall::precompiles::sha256::extend_tests::sha_extend_program, utils::setup_logger,
     };
     use p3_baby_bear::BabyBear;
+    use p3_matrix::Matrix;
     use sp1_core_executor::Executor;
     use sp1_stark::{
         baby_bear_poseidon2::BabyBearPoseidon2, debug_interactions_with_all_chips, InteractionKind,
@@ -525,5 +526,83 @@ mod tests {
             vec![InteractionKind::Byte],
             InteractionScope::Global,
         );
+    }
+
+    #[cfg(feature = "sys")]
+    #[test]
+    fn test_memory_global_event_to_row_ffi_is_incomplete_vs_rust_tracegen() {
+        use std::borrow::BorrowMut;
+
+        use rand::{thread_rng, Rng};
+
+        use sp1_core_executor::{events::MemoryInitializeFinalizeEvent, ExecutionRecord};
+
+        fn generate_trace_ffi(
+            events_sorted_by_addr: &[MemoryInitializeFinalizeEvent],
+            padded_nb_rows: usize,
+            is_receive: bool,
+        ) -> RowMajorMatrix<BabyBear> {
+            let mut values = vec![BabyBear::zero(); padded_nb_rows * NUM_MEMORY_INIT_COLS];
+            for (row_idx, event) in events_sorted_by_addr.iter().enumerate() {
+                let row = &mut values[row_idx * NUM_MEMORY_INIT_COLS..(row_idx + 1) * NUM_MEMORY_INIT_COLS];
+                let cols: &mut MemoryInitCols<BabyBear> = row.borrow_mut();
+                unsafe {
+                    crate::sys::memory_global_event_to_row_babybear(event, is_receive, cols);
+                }
+            }
+            RowMajorMatrix::new(values, NUM_MEMORY_INIT_COLS)
+        }
+
+        // Build synthetic events with unique addresses; the Rust tracegen sorts by addr.
+        let mut events: Vec<MemoryInitializeFinalizeEvent> = (0..8)
+            .map(|_| MemoryInitializeFinalizeEvent {
+                addr: thread_rng().gen_range(0..BabyBear::ORDER_U32),
+                value: thread_rng().gen(),
+                shard: thread_rng().gen_range(0..BabyBear::ORDER_U32),
+                timestamp: thread_rng().gen_range(0..BabyBear::ORDER_U32),
+            })
+            .collect();
+        events.sort_by_key(|e| e.addr);
+        events.dedup_by_key(|e| e.addr);
+        assert!(events.len() >= 2);
+
+        let mut record = ExecutionRecord::default();
+        record.global_memory_initialize_events = events.clone();
+        record.global_memory_finalize_events = events.clone();
+
+        for (kind, is_receive) in [(MemoryChipType::Initialize, false), (MemoryChipType::Finalize, true)] {
+            let chip = MemoryGlobalChip::new(kind);
+            let rust_trace: RowMajorMatrix<BabyBear> =
+                chip.generate_trace(&record, &mut ExecutionRecord::default());
+
+            // Match the Rust trace row order (sorted by addr) and padding length.
+            let events_sorted_by_addr = events.as_slice();
+            let ffi_trace = generate_trace_ffi(events_sorted_by_addr, rust_trace.height(), is_receive);
+
+            // The C++ `event_to_row` only fills a subset of `MemoryInitCols` and does not populate:
+            // - `lt_cols`, `is_next_comp`, `is_prev_addr_zero`, `is_first_comp`, `is_last_addr`
+            // so it cannot match the Rust tracegen output as-is.
+            assert_ne!(ffi_trace, rust_trace);
+
+            // Concrete mismatch signals:
+            // - Rust marks the last real row with `is_last_addr = 1`.
+            let last_real = events_sorted_by_addr.len() - 1;
+            let rust_last = rust_trace.row_slice(last_real);
+            let rust_last: &MemoryInitCols<BabyBear> = (*rust_last).borrow();
+            assert_eq!(rust_last.is_last_addr, BabyBear::one());
+
+            let ffi_last = ffi_trace.row_slice(last_real);
+            let ffi_last: &MemoryInitCols<BabyBear> = (*ffi_last).borrow();
+            assert_eq!(ffi_last.is_last_addr, BabyBear::zero());
+
+            // - Rust sets `is_next_comp = 1` for i != 0.
+            let rust_row1 = rust_trace.row_slice(1);
+            let rust_row1: &MemoryInitCols<BabyBear> = (*rust_row1).borrow();
+            assert_eq!(rust_row1.is_next_comp, BabyBear::one());
+
+            let ffi_row1 = ffi_trace.row_slice(1);
+            let ffi_row1: &MemoryInitCols<BabyBear> = (*ffi_row1).borrow();
+            assert_eq!(ffi_row1.is_next_comp, BabyBear::zero());
+        }
     }
 }
