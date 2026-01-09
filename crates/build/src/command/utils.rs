@@ -71,8 +71,6 @@ pub(crate) fn get_rust_compiler_flags(args: &BuildArgs, version: &semver::Versio
         "--cfg",
         "getrandom_backend=\"custom\"",
         "-C",
-        "llvm-args=-misched-prera-direction=bottomup",
-        "-C",
         "llvm-args=-misched-postra-direction=bottomup",
     ];
     let rust_flags: Vec<_> =
