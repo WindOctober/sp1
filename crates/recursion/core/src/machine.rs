@@ -350,6 +350,47 @@ pub mod tests {
     }
 
     #[test]
+    pub fn div_zero_by_zero_forged_proof_keeps_public_values() {
+        // This program's runtime semantics define DivF(0, 0) = 1, but the AIR only enforces
+        // `in2 * out = in1`, leaving `out` unconstrained when (in1, in2) = (0, 0).
+        //
+        // We demonstrate this by:
+        // - running the runtime to confirm it produces `out = 1`
+        // - forging the record to set `out != 1`
+        // - keeping the public-visible behavior unchanged by multiplying the forged value by 0
+        // - proving+verifying the forged record under the same (pk, vk)
+        let instructions = vec![
+            // Address 0 is read twice (DivF.in2 and MulF.in2), so we give it multiplicity 2.
+            instr::mem(MemAccessKind::Write, 2, 0, 0),
+            instr::mem(MemAccessKind::Write, 1, 1, 0),
+            instr::base_alu(BaseAluOpcode::DivF, 1, 2, 1, 0),
+            instr::base_alu(BaseAluOpcode::MulF, 1, 3, 2, 0),
+            instr::mem(MemAccessKind::Read, 1, 3, 0),
+        ];
+
+        let program = Arc::new(linear_program(instructions).unwrap());
+        let mut runtime =
+            Runtime::<F, EF, DiffusionMatrixBabyBear>::new(program.clone(), SC::new().perm);
+        runtime.run().unwrap();
+
+        assert_eq!(runtime.record.base_alu_events.len(), 2);
+        assert_eq!(runtime.record.base_alu_events[0].in1, F::zero());
+        assert_eq!(runtime.record.base_alu_events[0].in2, F::zero());
+        assert_eq!(runtime.record.base_alu_events[0].out, F::one());
+        assert_eq!(runtime.record.base_alu_events[1].in2, F::zero());
+        assert_eq!(runtime.record.base_alu_events[1].out, F::zero());
+
+        let forged_out = F::from_canonical_u32(7);
+        let mut forged_record = runtime.record;
+        forged_record.base_alu_events[0].out = forged_out;
+        forged_record.base_alu_events[1].in1 = forged_out;
+
+        let machine = A::machine_wide_with_all_chips(BabyBearPoseidon2::default());
+        let (pk, vk) = machine.setup(&program);
+        run_test_machine(vec![forged_record], machine, pk, vk).expect("Verification failed");
+    }
+
+    #[test]
     pub fn field_norm() {
         let mut instructions = Vec::new();
 
