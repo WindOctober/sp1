@@ -1,4 +1,4 @@
-# Ziren-RecursionCore-ZIR-UC-02: DivF (0/0) Output Unconstrained
+# SP1-RecursionCore: DivF (0/0) Output Unconstrained
 
 ## Summary
 - Violated invariant: `DivF` runtime defines (0/0) = 1, but the AIR does not enforce this semantic.
