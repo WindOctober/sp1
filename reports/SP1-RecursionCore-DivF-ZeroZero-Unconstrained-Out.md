@@ -44,6 +44,8 @@
   ```
 
 ### PoC Code (SP1)
+Permalink (GitHub): https://github.com/WindOctober/sp1/blob/c8e0ef20c/crates/recursion/core/src/machine.rs#L353
+
 From `crates/recursion/core/src/machine.rs`:
 ```rust
 #[test]
