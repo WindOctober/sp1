@@ -530,12 +530,24 @@ mod tests {
 
     #[cfg(feature = "sys")]
     #[test]
-    fn test_memory_global_event_to_row_ffi_is_incomplete_vs_rust_tracegen() {
+    #[ignore = "expected to fail: demonstrates sys FFI trace violates MemoryGlobal AIR constraints"]
+    fn test_sys_memory_global_ffi_trace_violates_air() {
         use std::borrow::BorrowMut;
 
+        use p3_field::AbstractExtensionField;
         use rand::{thread_rng, Rng};
 
         use sp1_core_executor::{events::MemoryInitializeFinalizeEvent, ExecutionRecord};
+        use sp1_stark::{
+            baby_bear_poseidon2::{BabyBearPoseidon2, Challenge},
+            debug_constraints,
+            septic_digest::SepticDigest,
+            Chip,
+        };
+
+        fn addr_to_bits(addr: u32) -> [u32; 32] {
+            core::array::from_fn(|i| (addr >> i) & 1)
+        }
 
         fn generate_trace_ffi(
             events_sorted_by_addr: &[MemoryInitializeFinalizeEvent],
@@ -556,7 +568,8 @@ mod tests {
         // Build synthetic events with unique addresses; the Rust tracegen sorts by addr.
         let mut events: Vec<MemoryInitializeFinalizeEvent> = (0..8)
             .map(|_| MemoryInitializeFinalizeEvent {
-                addr: thread_rng().gen_range(0..BabyBear::ORDER_U32),
+                // Ensure `previous_addr (== 1)` is strictly less than the first row's `addr`.
+                addr: thread_rng().gen_range(2..BabyBear::ORDER_U32),
                 value: thread_rng().gen(),
                 shard: thread_rng().gen_range(0..BabyBear::ORDER_U32),
                 timestamp: thread_rng().gen_range(0..BabyBear::ORDER_U32),
@@ -566,43 +579,63 @@ mod tests {
         events.dedup_by_key(|e| e.addr);
         assert!(events.len() >= 2);
 
+        // Make public values consistent with the events so the Rust trace satisfies AIR.
+        let last_addr = events.last().unwrap().addr;
+
         let mut record = ExecutionRecord::default();
         record.global_memory_initialize_events = events.clone();
         record.global_memory_finalize_events = events.clone();
+        // Use a non-zero previous addr so the first-row "x0 == 0" constraint is not triggered.
+        record.public_values.previous_init_addr_bits = addr_to_bits(1);
+        record.public_values.previous_finalize_addr_bits = addr_to_bits(1);
+        record.public_values.last_init_addr_bits = addr_to_bits(last_addr);
+        record.public_values.last_finalize_addr_bits = addr_to_bits(last_addr);
+
+        let public_values = record.public_values.to_vec::<BabyBear>();
+        let perm_challenges = [
+            Challenge::from_base(BabyBear::from_canonical_u32(7)),
+            Challenge::from_base(BabyBear::from_canonical_u32(13)),
+        ];
+        let global_cumulative_sum = SepticDigest::<BabyBear>::zero();
 
         for (kind, is_receive) in [(MemoryChipType::Initialize, false), (MemoryChipType::Finalize, true)] {
-            let chip = MemoryGlobalChip::new(kind);
-            let rust_trace: RowMajorMatrix<BabyBear> =
-                chip.generate_trace(&record, &mut ExecutionRecord::default());
+            let air = MemoryGlobalChip::new(kind);
+            let chip: Chip<BabyBear, MemoryGlobalChip> = Chip::new(air);
 
-            // Match the Rust trace row order (sorted by addr) and padding length.
+            let rust_trace: RowMajorMatrix<BabyBear> =
+                chip.air.generate_trace(&record, &mut ExecutionRecord::default());
+            let (rust_perm, rust_local_sum) =
+                chip.generate_permutation_trace(None, &rust_trace, &perm_challenges);
+
+            // Sanity: the Rust tracegen should satisfy the chip's AIR.
+            debug_constraints::<BabyBearPoseidon2, MemoryGlobalChip>(
+                &chip,
+                None,
+                &rust_trace,
+                &rust_perm,
+                &perm_challenges,
+                &public_values,
+                &rust_local_sum,
+                &global_cumulative_sum,
+            );
+
+            // Now swap in the sys FFI row-writer and show it does *not* satisfy AIR.
             let events_sorted_by_addr = events.as_slice();
             let ffi_trace = generate_trace_ffi(events_sorted_by_addr, rust_trace.height(), is_receive);
+            let (ffi_perm, ffi_local_sum) =
+                chip.generate_permutation_trace(None, &ffi_trace, &perm_challenges);
 
-            // The C++ `event_to_row` only fills a subset of `MemoryInitCols` and does not populate:
-            // - `lt_cols`, `is_next_comp`, `is_prev_addr_zero`, `is_first_comp`, `is_last_addr`
-            // so it cannot match the Rust tracegen output as-is.
-            assert_ne!(ffi_trace, rust_trace);
-
-            // Concrete mismatch signals:
-            // - Rust marks the last real row with `is_last_addr = 1`.
-            let last_real = events_sorted_by_addr.len() - 1;
-            let rust_last = rust_trace.row_slice(last_real);
-            let rust_last: &MemoryInitCols<BabyBear> = (*rust_last).borrow();
-            assert_eq!(rust_last.is_last_addr, BabyBear::one());
-
-            let ffi_last = ffi_trace.row_slice(last_real);
-            let ffi_last: &MemoryInitCols<BabyBear> = (*ffi_last).borrow();
-            assert_eq!(ffi_last.is_last_addr, BabyBear::zero());
-
-            // - Rust sets `is_next_comp = 1` for i != 0.
-            let rust_row1 = rust_trace.row_slice(1);
-            let rust_row1: &MemoryInitCols<BabyBear> = (*rust_row1).borrow();
-            assert_eq!(rust_row1.is_next_comp, BabyBear::one());
-
-            let ffi_row1 = ffi_trace.row_slice(1);
-            let ffi_row1: &MemoryInitCols<BabyBear> = (*ffi_row1).borrow();
-            assert_eq!(ffi_row1.is_next_comp, BabyBear::zero());
+            // Expected failure: this exits(1) after printing the failing row.
+            debug_constraints::<BabyBearPoseidon2, MemoryGlobalChip>(
+                &chip,
+                None,
+                &ffi_trace,
+                &ffi_perm,
+                &perm_challenges,
+                &public_values,
+                &ffi_local_sum,
+                &global_cumulative_sum,
+            );
         }
     }
 }
